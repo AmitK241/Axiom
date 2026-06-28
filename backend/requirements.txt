@@ -1,0 +1,30 @@
+# AXIOM Backend Dependencies
+# Resolved for Python 3.13 + Windows (no source compilation required)
+
+# Web framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+click>=8.1.7
+python-dotenv>=1.0.0
+python-multipart>=0.0.9
+sse-starlette>=2.0.0
+
+# LangChain 0.3.x stack (numpy 2.x compatible)
+langchain>=0.3.0
+langchain-groq>=0.2.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+
+# Database
+pymongo>=4.7.0
+motor>=3.4.0
+
+# Vector store (0.6+ dropped numpy<2 constraint)
+chromadb>=0.6.0
+
+# Utilities
+networkx>=3.3
+pydantic>=2.7.0
+httpx>=0.27.0
+numpy>=2.0.0
+tenacity>=8.1.0
