@@ -18,6 +18,7 @@ import BrainIcon         from '../components/BrainIcon'
 import ParticleBackground from '../components/ParticleBackground'
 import StarfieldCanvas   from '../components/StarfieldCanvas'
 
+const API_BASE = import.meta.env.VITE_API_URL || ''
 const CUBIC = 'cubic-bezier(0.4,0,0.2,1)'
 
 export default function HistoryPage() {
@@ -25,12 +26,12 @@ export default function HistoryPage() {
   const [analyses, setAnalyses] = useState([])
   const [loading,  setLoading]  = useState(true)
 
-  useEffect(() => {
-    axios.get('/api/history')
-      .then(r => setAnalyses(r.data.analyses || []))
-      .catch(() => setAnalyses([]))
-      .finally(() => setLoading(false))
-  }, [])
+useEffect(() => {
+  axios.get(`${API_BASE}/api/history`)
+    .then(r => setAnalyses(r.data.analyses || []))
+    .catch(() => setAnalyses([]))
+    .finally(() => setLoading(false))
+}, [])
 
   return (
     <div style={{

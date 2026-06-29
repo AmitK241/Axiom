@@ -12,11 +12,12 @@ export default defineConfig({
       }
     }
   },
+  define: {
+    'import.meta.env.VITE_API_URL': JSON.stringify(
+      process.env.VITE_API_URL || 'http://localhost:8000'
+    )
+  },
   optimizeDeps: {
-    // Exclude gsap and lenis from Vite's dep pre-bundling.
-    // gsap ships with very large source maps that cause esbuild OOM
-    // during the optimization pass. Both libs are already ESM-compatible
-    // so they don't need pre-bundling.
     exclude: ['gsap', 'lenis'],
   },
 })

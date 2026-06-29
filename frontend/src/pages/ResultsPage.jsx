@@ -29,6 +29,7 @@ import BrainIcon         from '../components/BrainIcon'
 import ParticleBackground from '../components/ParticleBackground'
 import StarfieldCanvas   from '../components/StarfieldCanvas'
 
+const API_BASE = import.meta.env.VITE_API_URL || ''
 const CUBIC = 'cubic-bezier(0.4,0,0.2,1)'
 
 // Section-wrapper style: hairline purple glow, no fill — starfield shows through
@@ -165,7 +166,7 @@ export default function ResultsPage() {
 
   const loadCachedAnalysis = async (id) => {
     try {
-      const response = await fetch(`/api/analysis/${id}`)
+      const response = await fetch(`${API_BASE}/api/analysis/${id}`)
       if (!response.ok) throw new Error('Analysis not found — re-running...')
       const doc = await response.json()
       // doc.result contains the full pipeline result
@@ -185,7 +186,7 @@ export default function ResultsPage() {
 
   const startAnalysis = async () => {
     try {
-      const response = await fetch('/api/analyze/stream', {
+      const response = await fetch(`${API_BASE}/api/analyze/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ field, matrix }),
