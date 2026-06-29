@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="frontend/public/axiom-logo.svg" alt="AXIOM logo" width="64" />
+<img src="logo.svg" alt="AXIOM logo" width="64" />
 
 # AXIOM
 ### The Cognitive Stress-Test & Blind Spot Engine
@@ -130,7 +130,7 @@ Try it yourself — enter a claim like *"AI Research"*, *"Cancer Treatment"*, or
 
 - **🌌 Custom Particle Engine** — A canvas-based ambient particle field with spring-back cursor interaction, built without a WebGL dependency for stable cross-device performance.
 - **🕸️ Force-Directed Assumption Graph** — Every detected assumption renders as a D3 force-simulation node, sized and color-coded by blind spot score, with hover-to-reveal detail.
-- **⚡ Groq LPU Inference** — Multi-agent debate runs on Llama 3.3 70B via Groq's custom LPU hardware for near-instant response, instead of the multi-second latency typical of GPU-hosted inference.
+- **⚡ Groq LPU Inference** — Multi-agent debate runs on llama-3.1-8b-instant via Groq's custom LPU hardware for near-instant response, instead of the multi-second latency typical of GPU-hosted inference.
 
 ---
 
@@ -184,6 +184,6 @@ Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 
 **Built for Moonshot Hackathon 2026**
 
-*Question what cannot be questioned.*
+*Before the market crashes your idea, let AXIOM do it.*
 
 </div>
