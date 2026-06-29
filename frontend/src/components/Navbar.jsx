@@ -6,9 +6,9 @@
  * - Logo + About text render directly on the particle background
  * - "Past Analyses" keeps its own pill gradient — unaffected by outer transparency
  * - Active-route states via useLocation
- * - Hidden on mobile (<640px): About link only
+ * - All three items (Logo, About, Past Analyses) are visible at every viewport width
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useHideOnScroll } from '../hooks/useHideOnScroll'
 
@@ -38,20 +38,8 @@ export default function Navbar() {
   const hidden   = useHideOnScroll()
   const navRef   = useRef(null)
 
-  const [isMobile,     setIsMobile]     = useState(
-    typeof window !== 'undefined' && window.innerWidth < 640
-  )
   const [aboutHover,   setAboutHover]   = useState(false)
   const [historyHover, setHistoryHover] = useState(false)
-
-  // ── Resize listener ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 639px)')
-    const h  = e => setIsMobile(e.matches)
-    mq.addEventListener('change', h)
-    setIsMobile(mq.matches)
-    return () => mq.removeEventListener('change', h)
-  }, [])
 
   // ── Active states ────────────────────────────────────────────────────────────
   const isAbout   = path === '/about'
@@ -67,7 +55,8 @@ export default function Navbar() {
     display:        'flex',
     alignItems:     'center',
     justifyContent: 'space-between',
-    padding:        isMobile ? '12px 16px' : '14px 28px',
+    // clamp padding so items don't get clipped on narrow phones (375 px)
+    padding:        'clamp(10px, 3vw, 14px) clamp(12px, 4vw, 28px)',
     height:         NAV_HEIGHT,
     // ── transparency: NO background, NO border, NO shadow, NO backdrop ──────
     background:     'none',
@@ -87,12 +76,14 @@ export default function Navbar() {
     color:         isAbout ? '#a78bfa' : aboutHover ? '#ffffff' : 'rgba(200,200,220,0.82)',
     border:        'none',
     borderRadius:  999,
-    padding:       '8px 16px',
-    fontSize:      13,
+    // tighter horizontal padding on narrow screens so it fits beside the pill CTA
+    padding:       'clamp(6px, 1.5vw, 8px) clamp(8px, 2.5vw, 16px)',
+    fontSize:      'clamp(11px, 3vw, 13px)',
     fontWeight:    600,
     fontFamily:    "'Oxanium', cursive",
     cursor:        'pointer',
     letterSpacing: '0.02em',
+    whiteSpace:    'nowrap',
     transition:    'all 200ms ease',
     // subtle text shadow for legibility against particle bg
     textShadow:    '0 1px 8px rgba(0,0,0,0.6)',
@@ -104,8 +95,9 @@ export default function Navbar() {
     color:         '#ffffff',
     border:        'none',
     borderRadius:  999,
-    padding:       '9px 22px',
-    fontSize:      13,
+    // reduce padding on narrow screens to prevent overflow
+    padding:       'clamp(7px, 1.5vw, 9px) clamp(10px, 3.5vw, 22px)',
+    fontSize:      'clamp(11px, 3vw, 13px)',
     fontWeight:    700,
     fontFamily:    "'Oxanium', cursive",
     cursor:        'pointer',
@@ -147,19 +139,17 @@ export default function Navbar() {
       </button>
 
       {/* ── Nav links ──────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        {/* About — hidden on mobile */}
-        {!isMobile && (
-          <button
-            onClick={() => navigate('/about')}
-            style={aboutStyle}
-            onMouseEnter={() => setAboutHover(true)}
-            onMouseLeave={() => setAboutHover(false)}
-            aria-current={isAbout ? 'page' : undefined}
-          >
-            About
-          </button>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'clamp(2px, 1vw, 4px)' }}>
+        {/* About — always visible at every viewport width */}
+        <button
+          onClick={() => navigate('/about')}
+          style={aboutStyle}
+          onMouseEnter={() => setAboutHover(true)}
+          onMouseLeave={() => setAboutHover(false)}
+          aria-current={isAbout ? 'page' : undefined}
+        >
+          About
+        </button>
 
         {/* Past Analyses — always visible, keeps own pill bg */}
         <button
