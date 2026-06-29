@@ -254,12 +254,26 @@ function HistoryCard({ analysis: a, onClick }) {
   const matrixBg    = isVenture ? 'rgba(251,146,60,0.20)'  : 'rgba(139,92,246,0.20)'
   const matrixBdr   = isVenture ? 'rgba(251,146,60,0.40)'  : 'rgba(139,92,246,0.40)'
 
-  const dateStr = a.created_at
-    ? new Date(a.created_at).toLocaleDateString('en-IN', {
-        day: 'numeric', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit',
-      })
-    : null
+  // Build a localized timestamp that reflects the viewer's machine clock,
+  // not raw UTC. toLocaleDateString + toLocaleTimeString with the 'en-IN'
+  // locale correctly converts the stored UTC ISO string to the user's local
+  // wall-clock time (IST +5:30, or whatever the browser reports).
+  // Mixing time options into toLocaleDateString is spec-ambiguous and silently
+  // drops the time on several browser/OS combinations — so we call both APIs
+  // separately and join them.
+  const dateStr = (() => {
+    if (!a.created_at) return null
+    const d = new Date(a.created_at)
+    if (isNaN(d.getTime())) return null          // guard against malformed ISO strings
+    const datePart = d.toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', year: 'numeric',
+    })
+    const timePart = d.toLocaleTimeString('en-IN', {
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    })
+    return `${datePart}, ${timePart}`
+  })()
+
 
   return (
     <div

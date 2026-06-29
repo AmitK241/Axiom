@@ -333,10 +333,30 @@ export default function ResultsPage() {
         }
       }
 
-      // Natural end of stream — disarm the watchdog so rescue doesn’t fire
-      // after a clean [DONE] / reader EOF.
+      // Natural end of stream — always disarm the watchdog first.
       clearTimeout(groqStreamWatchdog.current)
       isStreamingRef.current = false
+
+      // ─────────────────────────────────────────────────────────────────────
+      // INFINITE-LOADER SAFEGUARD
+      // If the reader hit EOF but resultsRef is still null, the backend's
+      // final `complete` SSE event was never delivered to the frontend.
+      // Common causes: Vercel 10-s function timeout cuts the pipe after the
+      // last assumption saves to MongoDB, Groq flush drops the final frame,
+      // or the network layer closes the connection between the last
+      // `assumption_done` and the `complete` emit.
+      //
+      // Rather than leaving the user frozen on the loading spinner forever,
+      // we immediately trigger the same DB rescue that the watchdog uses —
+      // pulling the already-persisted result straight from MongoDB.
+      // ─────────────────────────────────────────────────────────────────────
+      if (!resultsRef.current) {
+        console.warn(
+          '[Stream] Reader EOF with no `complete` event — ' +
+          'backend likely finished but pipe was cut. Routing to DB rescue.'
+        )
+        await executeDatabaseRescue()
+      }
 
     } catch (err) {
       clearTimeout(groqStreamWatchdog.current)
