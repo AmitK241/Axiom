@@ -83,6 +83,15 @@ export default function ResultsPage() {
     typeof window !== 'undefined' && window.innerWidth < 900
   )
   const [pipelineOpen, setPipelineOpen] = useState(true)
+  const [rescueAttempted, setRescueAttempted] = useState(false)
+
+  // ── Watchdog timer + stream abort refs ───────────────────────────────
+  // Using refs ensures the watchdog callback always sees the current
+  // abort controller and never traps a stale closure value.
+  const groqStreamWatchdog = useRef(null)   // sliding 30-s timer handle
+  const abortController   = useRef(null)   // AbortController tied to the active fetch
+  const isStreamingRef    = useRef(false)  // mirror of phase==='streaming', safe inside async
+  const resultsRef        = useRef(null)   // mirror of results state for rescue guard
 
   // Particle anchor
   const [particleCX, setParticleCX] = useState(0.50)
@@ -154,13 +163,18 @@ export default function ResultsPage() {
     setTimeout(() => setToast(null), 2000)
   }
 
-  // ── Stream handling ─────────────────────────────────────────────────────
+  // ── Stream handling ───────────────────────────────────────────────
   useEffect(() => {
     if (!field) { navigate('/'); return }
     if (analysisId) {
       loadCachedAnalysis(analysisId)
     } else {
       startAnalysis()
+    }
+    // Cleanup: clear any lingering watchdog when navigating away
+    return () => {
+      clearTimeout(groqStreamWatchdog.current)
+      if (abortController.current) abortController.current.abort()
     }
   }, [field])
 
@@ -184,25 +198,156 @@ export default function ResultsPage() {
     }
   }
 
+  // ──────────────────────────────────────────────────────────
+  // DATABASE RESCUE STRATEGY
+  // Sole responsibility: abort the stalled network connection, then make
+  // one background GET to /api/analysis/latest?field=... to pull the most
+  // recently persisted result. If the backend finished writing to MongoDB
+  // independently of the broken SSE pipe, this gives us the complete data.
+  // ──────────────────────────────────────────────────────────
+  const executeDatabaseRescue = async () => {
+    // Guard: if results already landed (race between final token and watchdog
+    // fire), do not overwrite good data with a stale DB fetch.
+    if (resultsRef.current) {
+      console.info('[Watchdog] Results already present — rescue skipped.')
+      return
+    }
+
+    // ① Kill the stalled SSE connection
+    if (abortController.current) {
+      console.warn('[Watchdog] Aborting stalled SSE connection.')
+      abortController.current.abort()
+    }
+
+    // Log rescue attempt in the streaming panel so the user sees activity
+    setStreamLog(prev => [...prev, {
+      type: 'status',
+      message: '⚠️ Stream idle — activating DB rescue fallback…',
+    }])
+    setRescueAttempted(true)
+
+    // ② Background fetch to the rescue endpoint
+    try {
+      const rescueRes = await fetch(
+        `${API_BASE}/api/analysis/latest?field=${encodeURIComponent(field)}`
+      )
+
+      if (!rescueRes.ok) {
+        // Backend hasn't finished persisting yet (still running, or no DB)
+        const msg = rescueRes.status === 404
+          ? 'Backend still processing — no completed result in DB yet.'
+          : `Rescue endpoint error: ${rescueRes.status}`
+        console.warn(`[Watchdog] ${msg}`)
+        setStreamLog(prev => [...prev, { type: 'status', message: `⚠️ ${msg}` }])
+        // Surface a gentle error rather than a blank screen
+        setError('Analysis is taking longer than expected. Please retry or check back in a moment.')
+        setPhase('error')
+        isStreamingRef.current = false
+        return
+      }
+
+      const doc = await rescueRes.json()
+      const rescuedData = doc.result
+
+      // Validate the rescued payload has the shape we need
+      if (!rescuedData || !rescuedData.results || rescuedData.results.length === 0) {
+        throw new Error('Rescued document is malformed or empty.')
+      }
+
+      console.info('[Watchdog] ✅ Rescue successful — injecting DB result into state.')
+      setStreamLog(prev => [...prev, {
+        type: 'done',
+        message: '✅ Recovered from DB — pipeline completed server-side.',
+      }])
+
+      // ③ Inject the full dataset and transition to results view
+      resultsRef.current = rescuedData
+      setResults(rescuedData)
+      setProgress(100)
+      setLayer2Done(true)
+      setLayer3Done(true)
+      setLayer4Done(true)
+      isStreamingRef.current = false
+      setTimeout(() => setPhase('results'), 500)
+
+    } catch (rescueErr) {
+      console.error('[Watchdog] Rescue fetch failed:', rescueErr)
+      setError(`Stream timed out and rescue failed: ${rescueErr.message}`)
+      setPhase('error')
+      isStreamingRef.current = false
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // SLIDING WATCHDOG RESET
+  // Called on every decoded chunk from the SSE stream. Clears the previous
+  // 30-second timer and starts a fresh one. This means the rescue only
+  // fires if the stream goes completely silent for a full 30 seconds —
+  // long enough to survive Groq’s free-tier token bursts and rate-limit
+  // queuing without triggering false-positive rescues.
+  // ──────────────────────────────────────────────────────────
+  const resetWatchdog = () => {
+    clearTimeout(groqStreamWatchdog.current)
+    if (!isStreamingRef.current) return  // stream already complete, no need to arm
+    groqStreamWatchdog.current = setTimeout(() => {
+      console.warn(
+        '[Watchdog] Groq stream idle for 30 s. Activating resilient DB backup rescue…'
+      )
+      executeDatabaseRescue()
+    }, 30_000)
+  }
+
   const startAnalysis = async () => {
+    isStreamingRef.current = true
+    // Arm the watchdog immediately — if the initial POST itself hangs
+    // (Vercel cold start, Groq queue), the 30 s clock starts now.
+    resetWatchdog()
+
+    // Create a fresh AbortController for this stream session
+    abortController.current = new AbortController()
+
     try {
       const response = await fetch(`${API_BASE}/api/analyze/stream`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ field, matrix }),
+        body:    JSON.stringify({ field, matrix }),
+        signal:  abortController.current.signal,
       })
       const reader  = response.body.getReader()
       const decoder = new TextDecoder()
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+
         const chunk = decoder.decode(value)
+
+        // ▶ Every chunk resets the 30-second watchdog — this is the core of
+        //   the sliding window. As long as tokens keep arriving (even slowly)
+        //   the rescue will never fire.
+        resetWatchdog()
+
         for (const line of chunk.split('\n')) {
           if (!line.startsWith('data: ')) continue
           try { handleStreamEvent(JSON.parse(line.slice(6))) } catch {}
         }
       }
+
+      // Natural end of stream — disarm the watchdog so rescue doesn’t fire
+      // after a clean [DONE] / reader EOF.
+      clearTimeout(groqStreamWatchdog.current)
+      isStreamingRef.current = false
+
     } catch (err) {
+      clearTimeout(groqStreamWatchdog.current)
+      isStreamingRef.current = false
+
+      // AbortError is expected when we intentionally kill the connection;
+      // do not surface it as a user-facing error.
+      if (err.name === 'AbortError') {
+        console.info('[Watchdog] Fetch aborted — rescue handler will take over.')
+        return
+      }
       setError(err.message)
       setPhase('error')
     }
@@ -230,12 +375,20 @@ export default function ResultsPage() {
         setLayer3Done(true)
         break
       case 'complete':
+        // ▶ Graceful completion clear — disarm the watchdog immediately so the
+        //   rescue script doesn’t execute after a successful [DONE] signal.
+        clearTimeout(groqStreamWatchdog.current)
+        isStreamingRef.current = false
+
+        resultsRef.current = data.result
         setResults(data.result)
         setProgress(100)
         setLayer4Done(true)
         setTimeout(() => setPhase('results'), 500)
         break
       case 'error':
+        clearTimeout(groqStreamWatchdog.current)
+        isStreamingRef.current = false
         setError(data.message)
         setPhase('error')
         break

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from core.pipeline import (
@@ -121,6 +121,35 @@ async def analyze(request: AnalyzeRequest):
 async def get_history():
     analyses = await get_recent_analyses(20)
     return {"analyses": analyses}
+
+# ─── WATCHDOG RESCUE — latest saved result for a given field ─────
+# Called by the frontend 30-second sliding watchdog when the SSE stream
+# goes silent (Vercel timeout / Groq rate-limit stall). Returns the
+# most-recently persisted full result doc so the UI can recover gracefully.
+@router.get("/analysis/latest")
+async def get_latest_analysis_for_field(
+    field: str = Query(..., description="Exact field name to look up")
+):
+    from memory.database import db as _db
+    if _db is None:
+        raise HTTPException(503, "Database unavailable — no persisted result to rescue from")
+    try:
+        import re
+        # Case-insensitive exact match, most-recent first
+        pattern = re.compile(f"^{re.escape(field.strip())}$", re.IGNORECASE)
+        doc = await _db.analyses.find_one(
+            {"field": {"$regex": pattern}},
+            sort=[("created_at", -1)]
+        )
+        if not doc:
+            raise HTTPException(404, f"No saved analysis for field '{field}'")
+        doc["_id"] = str(doc["_id"])
+        return doc
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Rescue fetch failed: {e}")
+
 
 @router.get("/analysis/{analysis_id}")
 async def get_analysis(analysis_id: str):
