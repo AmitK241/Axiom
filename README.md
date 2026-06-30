@@ -1,8 +1,9 @@
 <div align="center">
 
 <img src="logo.svg" alt="AXIOM logo" width="64" />
+<br/>
+<img src="axiom-wordmark.png" alt="AXIOM" width="360" />
 
-# AXIOM
 ### The Cognitive Stress-Test & Blind Spot Engine
 
 **AXIOM doesn't just analyze ideas — it tries to break them, so the market doesn't have to.**
@@ -119,7 +120,7 @@ Try it yourself — enter a claim like *"AI Research"*, *"Cancer Treatment"*, or
 |---|---|
 | **Frontend** | React (Vite) + TailwindCSS |
 | **Backend** | FastAPI (Python) + LangChain |
-| **AI Inference** | Groq LPU — Llama 3.3 70B |
+| **AI Inference** | Groq LPU — llama-3.1-8b-instant |
 | **Database** | MongoDB Atlas + ChromaDB (vector store) |
 | **Frontend Hosting** | Vercel |
 | **Backend Hosting** | Railway |
