@@ -357,14 +357,14 @@ export default function AboutPage() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', justifyContent: 'center' }}>
               {[
                 { label: '⚛️ React',           color: '#38bdf8', border: 'rgba(56,189,248,0.3)'   },
-                { label: '🟢 Node.js',          color: '#34d399', border: 'rgba(52,211,153,0.3)'   },
-                { label: '🚂 Express',           color: '#94a3b8', border: 'rgba(148,163,184,0.3)'  },
+                { label: '⚡ Vite',             color: '#fbbf24', border: 'rgba(139,92,246,0.3)'   },
+                { label: '🚀 FastAPI',           color: '#34d399', border: 'rgba(52,211,153,0.3)'   },
+                { label: '🔗 LangChain',         color: '#4ade80', border: 'rgba(74,222,128,0.3)'   },
+                { label: '🤖 Groq API',          color: '#06b6d4', border: 'rgba(6,182,212,0.3)'    },
                 { label: '🍃 MongoDB Atlas',     color: '#34d399', border: 'rgba(52,211,153,0.3)'   },
-                { label: '🤖 Groq  API',          color: '#06b6d4', border: 'rgba(6,182,212,0.3)'   },
                 { label: '✨ Framer Motion',     color: '#f472b6', border: 'rgba(244,114,182,0.3)'  },
-                { label: '🎨 Particle Canvas',   color: '#fb923c', border: 'rgba(251,146,60,0.3)'   },
                 { label: '▲ Vercel',             color: '#ffffff', border: 'rgba(255,255,255,0.3)'  },
-                { label: '🚄 Railway',            color: '#fbbf24', border: 'rgba(251,191,36,0.3)'   },
+                { label: '🚂 Railway',            color: '#a78bfa', border: 'rgba(139,92,246,0.3)'   },
               ].map(({ label, color, border }) => (
                 <div key={label} style={{
                   padding: '10px 20px', borderRadius: '100px',
