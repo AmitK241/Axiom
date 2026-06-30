@@ -62,6 +62,14 @@ function AgentCard({ agentKey, data, active, delay }) {
           📅 {data.historical_precedent}
         </p>
       )}
+      {active && data?.evidence_ref && (
+        <div style={{
+          fontSize: 11, fontStyle: 'italic', opacity: 0.7,
+          marginTop: 6, color: 'inherit'
+        }}>
+          📎 {data.evidence_ref}
+        </div>
+      )}
     </div>
   )
 }

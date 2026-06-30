@@ -94,7 +94,8 @@ Return JSON with these exact keys:
     "year_approximate": "approximate year or decade",
     "how_it_fell": "how was it proven wrong",
     "challenge": "one-sentence sharp historical challenge to this assumption",
-    "risk_level": "low|medium|high|catastrophic"
+    "risk_level": "low|medium|high|catastrophic",
+    "evidence_ref": "one specific real-world example or data point supporting this challenge, or empty string"
 }}
 """)
     ]
@@ -116,7 +117,8 @@ Return JSON with these exact keys:
     "opposite_hypothesis": "what if the opposite were true?",
     "uncomfortable_question": "the question nobody is asking",
     "challenge": "one-sentence devastating challenge to this assumption",
-    "risk_level": "low|medium|high|catastrophic"
+    "risk_level": "low|medium|high|catastrophic",
+    "evidence_ref": "one specific real-world example or data point supporting this challenge, or empty string"
 }}
 """)
     ]
@@ -138,7 +140,8 @@ Return JSON with these exact keys:
     "contradicting_evidence": "any existing data that contradicts this",
     "falsification_test": "one experiment that could prove this wrong",
     "challenge": "one-sentence scientific challenge to this assumption",
-    "risk_level": "low|medium|high|catastrophic"
+    "risk_level": "low|medium|high|catastrophic",
+    "evidence_ref": "one specific real-world example or data point supporting this challenge, or empty string"
 }}
 """)
     ]
@@ -160,7 +163,8 @@ Return JSON with these exact keys:
     "alternative_framework": "philosophical tradition that would reject this",
     "value_judgment_embedded": "what value judgment is hidden in this assumption",
     "challenge": "one-sentence philosophical challenge to this assumption",
-    "risk_level": "low|medium|high|catastrophic"
+    "risk_level": "low|medium|high|catastrophic",
+    "evidence_ref": "one specific real-world example or data point supporting this challenge, or empty string"
 }}
 """)
     ]

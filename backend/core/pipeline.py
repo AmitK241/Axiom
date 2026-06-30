@@ -86,7 +86,8 @@ Return JSON with these exact keys:
     "weakest_point": "the most critical flaw you identify",
     "opportunity_or_risk": "what this means for your domain",
     "challenge": "one-sentence sharp challenge to this assumption from your perspective",
-    "risk_level": "low|medium|high|catastrophic"
+    "risk_level": "low|medium|high|catastrophic",
+    "evidence_ref": "one specific real-world example or data point supporting this challenge, or empty string"
 }}"""
     max_retries = 3
     for attempt in range(max_retries):
