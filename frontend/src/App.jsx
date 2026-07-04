@@ -784,7 +784,7 @@
 //             textAlign: 'center',
 //             fontSize: 10, color: 'rgba(255,255,255,0.12)', letterSpacing: '0.08em',
 //           }}>
-//             AXIOM · Moonshot Hackathon 2026 · epistemic multi-agent pipeline
+//             AXIOM · epistemic multi-agent pipeline
 //           </div>
 //         </section>
 
@@ -1286,7 +1286,7 @@ export default function App() {
           fontFamily: "'Space Grotesk', sans-serif",
           borderTop: '1px solid rgba(255,255,255,0.04)',
         }}>
-          AXIOM · Moonshot Hackathon 2026 · epistemic multi-agent pipeline
+          AXIOM · epistemic multi-agent pipeline
         </footer>
 
       </main>

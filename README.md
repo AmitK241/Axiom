@@ -183,7 +183,7 @@ Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 <div align="center">
 <br/>
 
-**Built for Moonshot Hackathon 2026**
+**Built for AXIOM**
 
 *Before the market crashes your idea, let AXIOM do it.*
 
