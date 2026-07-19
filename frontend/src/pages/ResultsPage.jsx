@@ -88,10 +88,11 @@ export default function ResultsPage() {
   // ── Watchdog timer + stream abort refs ───────────────────────────────
   // Using refs ensures the watchdog callback always sees the current
   // abort controller and never traps a stale closure value.
-  const groqStreamWatchdog = useRef(null)   // sliding 30-s timer handle
+  const groqStreamWatchdog = useRef(null)   // sliding 65-s timer handle
   const abortController   = useRef(null)   // AbortController tied to the active fetch
   const isStreamingRef    = useRef(false)  // mirror of phase==='streaming', safe inside async
   const resultsRef        = useRef(null)   // mirror of results state for rescue guard
+  const isMountedRef      = useRef(true)   // set false on unmount — guards async setState calls
 
   // Particle anchor
   const [particleCX, setParticleCX] = useState(0.50)
@@ -173,6 +174,7 @@ export default function ResultsPage() {
     }
     // Cleanup: clear any lingering watchdog when navigating away
     return () => {
+      isMountedRef.current = false
       clearTimeout(groqStreamWatchdog.current)
       if (abortController.current) abortController.current.abort()
     }
@@ -198,50 +200,76 @@ export default function ResultsPage() {
     }
   }
 
+
   // ──────────────────────────────────────────────────────────
   // DATABASE RESCUE STRATEGY
   // Sole responsibility: abort the stalled network connection, then make
-  // one background GET to /api/analysis/latest?field=... to pull the most
-  // recently persisted result. If the backend finished writing to MongoDB
-  // independently of the broken SSE pipe, this gives us the complete data.
+  // a GET to /api/analysis/latest?field=... to pull the most recently
+  // persisted result. On 404 (backend still processing), retries up to 3
+  // times with a 5-second delay before surfacing an error to the user.
   // ──────────────────────────────────────────────────────────
-  const executeDatabaseRescue = async () => {
-    // Guard: if results already landed (race between final token and watchdog
-    // fire), do not overwrite good data with a stale DB fetch.
+  const executeDatabaseRescue = async (retryCount = 0) => {
+    // Guard: if results already landed (race between final complete SSE
+    // event and watchdog fire), do not overwrite good data with a stale
+    // DB fetch -- covers both first call and any subsequent retry.
     if (resultsRef.current) {
-      console.info('[Watchdog] Results already present — rescue skipped.')
+      console.info('[Watchdog] Results already present -- rescue skipped.')
       return
     }
 
-    // ① Kill the stalled SSE connection
-    if (abortController.current) {
-      console.warn('[Watchdog] Aborting stalled SSE connection.')
-      abortController.current.abort()
+    // Kill the stalled SSE connection (only on the first attempt)
+    if (retryCount === 0) {
+      if (abortController.current) {
+        console.warn('[Watchdog] Aborting stalled SSE connection.')
+        abortController.current.abort()
+      }
+      // Log rescue attempt in the streaming panel so the user sees activity
+      if (isMountedRef.current) {
+        setStreamLog(prev => [...prev, {
+          type: 'status',
+          message: 'Stream idle -- activating DB rescue fallback...',
+        }])
+        setRescueAttempted(true)
+      }
     }
 
-    // Log rescue attempt in the streaming panel so the user sees activity
-    setStreamLog(prev => [...prev, {
-      type: 'status',
-      message: '⚠️ Stream idle — activating DB rescue fallback…',
-    }])
-    setRescueAttempted(true)
-
-    // ② Background fetch to the rescue endpoint
+    // Background fetch to the rescue endpoint
     try {
       const rescueRes = await fetch(
         `${API_BASE}/api/analysis/latest?field=${encodeURIComponent(field)}`
       )
 
       if (!rescueRes.ok) {
-        // Backend hasn't finished persisting yet (still running, or no DB)
+        if (rescueRes.status === 404 && retryCount < 3) {
+          // Backend is still processing -- schedule a retry after 5 seconds.
+          const attempt = retryCount + 1
+          console.warn(`[Watchdog] 404 -- backend still processing. Retry ${attempt}/3 in 5s...`)
+          if (isMountedRef.current) {
+            setStreamLog(prev => [...prev, {
+              type: 'status',
+              message: `Retrying in 5s (${attempt}/3)...`,
+            }])
+          }
+          await new Promise(resolve => setTimeout(resolve, 5_000))
+          // After the delay, re-check mount status and results before retrying
+          if (!isMountedRef.current) return
+          if (resultsRef.current) {
+            console.info('[Watchdog] Results arrived during retry delay -- rescue skipped.')
+            return
+          }
+          return executeDatabaseRescue(attempt)
+        }
+
+        // Non-404 error, or all 3 retries exhausted on 404
         const msg = rescueRes.status === 404
-          ? 'Backend still processing — no completed result in DB yet.'
+          ? 'Backend still processing after 3 retries -- no completed result in DB.'
           : `Rescue endpoint error: ${rescueRes.status}`
         console.warn(`[Watchdog] ${msg}`)
-        setStreamLog(prev => [...prev, { type: 'status', message: `⚠️ ${msg}` }])
-        // Surface a gentle error rather than a blank screen
-        setError('Analysis is taking longer than expected. Please retry or check back in a moment.')
-        setPhase('error')
+        if (isMountedRef.current) {
+          setStreamLog(prev => [...prev, { type: 'status', message: `${msg}` }])
+          setError('Analysis is taking longer than expected. Please retry or check back in a moment.')
+          setPhase('error')
+        }
         isStreamingRef.current = false
         return
       }
@@ -254,53 +282,68 @@ export default function ResultsPage() {
         throw new Error('Rescued document is malformed or empty.')
       }
 
-      console.info('[Watchdog] ✅ Rescue successful — injecting DB result into state.')
-      setStreamLog(prev => [...prev, {
-        type: 'done',
-        message: '✅ Recovered from DB — pipeline completed server-side.',
-      }])
+      // Final guard: a complete SSE event might have arrived while we were
+      // awaiting the rescue fetch -- do not overwrite valid streamed results.
+      if (resultsRef.current) {
+        console.info('[Watchdog] Results arrived before rescue could inject -- skipping overwrite.')
+        return
+      }
 
-      // ③ Inject the full dataset and transition to results view
+      console.info('[Watchdog] Rescue successful -- injecting DB result into state.')
+      if (isMountedRef.current) {
+        setStreamLog(prev => [...prev, {
+          type: 'done',
+          message: 'Recovered from DB -- pipeline completed server-side.',
+        }])
+      }
+
+      // Inject the full dataset and transition to results view
       resultsRef.current = rescuedData
-      setResults(rescuedData)
-      setProgress(100)
-      setLayer2Done(true)
-      setLayer3Done(true)
-      setLayer4Done(true)
       isStreamingRef.current = false
-      setTimeout(() => setPhase('results'), 500)
+      if (isMountedRef.current) {
+        setResults(rescuedData)
+        setProgress(100)
+        setLayer2Done(true)
+        setLayer3Done(true)
+        setLayer4Done(true)
+        setTimeout(() => {
+          if (isMountedRef.current) setPhase('results')
+        }, 500)
+      }
 
     } catch (rescueErr) {
       console.error('[Watchdog] Rescue fetch failed:', rescueErr)
-      setError(`Stream timed out and rescue failed: ${rescueErr.message}`)
-      setPhase('error')
       isStreamingRef.current = false
+      if (isMountedRef.current) {
+        setError(`Stream timed out and rescue failed: ${rescueErr.message}`)
+        setPhase('error')
+      }
     }
   }
 
   // ──────────────────────────────────────────────────────────
   // SLIDING WATCHDOG RESET
   // Called on every decoded chunk from the SSE stream. Clears the previous
-  // 30-second timer and starts a fresh one. This means the rescue only
-  // fires if the stream goes completely silent for a full 30 seconds —
-  // long enough to survive Groq’s free-tier token bursts and rate-limit
-  // queuing without triggering false-positive rescues.
+  // 65-second timer and starts a fresh one. This means the rescue only
+  // fires if the stream goes completely silent for a full 65 seconds --
+  // chosen to safely exceed Render free-tier worst-case cold-start delay
+  // (~50 s) while also covering Groq rate-limit queuing pauses.
   // ──────────────────────────────────────────────────────────
   const resetWatchdog = () => {
     clearTimeout(groqStreamWatchdog.current)
     if (!isStreamingRef.current) return  // stream already complete, no need to arm
     groqStreamWatchdog.current = setTimeout(() => {
       console.warn(
-        '[Watchdog] Groq stream idle for 30 s. Activating resilient DB backup rescue…'
+        '[Watchdog] Stream idle for 65 s. Activating resilient DB backup rescue...'
       )
       executeDatabaseRescue()
-    }, 30_000)
+    }, 65_000)
   }
 
   const startAnalysis = async () => {
     isStreamingRef.current = true
     // Arm the watchdog immediately — if the initial POST itself hangs
-    // (Vercel cold start, Groq queue), the 30 s clock starts now.
+    // (Render cold start, Groq queue), the 65 s clock starts now.
     resetWatchdog()
 
     // Create a fresh AbortController for this stream session
@@ -322,7 +365,7 @@ export default function ResultsPage() {
 
         const chunk = decoder.decode(value)
 
-        // ▶ Every chunk resets the 30-second watchdog — this is the core of
+        // ▶ Every chunk resets the 65-second watchdog — this is the core of
         //   the sliding window. As long as tokens keep arriving (even slowly)
         //   the rescue will never fire.
         resetWatchdog()
