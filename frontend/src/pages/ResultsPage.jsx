@@ -84,11 +84,12 @@ export default function ResultsPage() {
   )
   const [pipelineOpen, setPipelineOpen] = useState(true)
   const [rescueAttempted, setRescueAttempted] = useState(false)
+  const [elapsedSeconds, setElapsedSeconds]   = useState(0)   // tracks streaming phase duration for UX hints
 
   // ── Watchdog timer + stream abort refs ───────────────────────────────
   // Using refs ensures the watchdog callback always sees the current
   // abort controller and never traps a stale closure value.
-  const groqStreamWatchdog = useRef(null)   // sliding 65-s timer handle
+  const groqStreamWatchdog = useRef(null)   // sliding 110-s timer handle
   const abortController   = useRef(null)   // AbortController tied to the active fetch
   const isStreamingRef    = useRef(false)  // mirror of phase==='streaming', safe inside async
   const resultsRef        = useRef(null)   // mirror of results state for rescue guard
@@ -205,9 +206,13 @@ export default function ResultsPage() {
   // DATABASE RESCUE STRATEGY
   // Sole responsibility: abort the stalled network connection, then make
   // a GET to /api/analysis/latest?field=... to pull the most recently
-  // persisted result. On 404 (backend still processing), retries up to 3
-  // times with a 5-second delay before surfacing an error to the user.
+  // persisted result. On 404 (backend still processing), retries up to 7
+  // times with Fibonacci-like growing gaps [5,8,13,21,34,55,89]s before
+  // surfacing an error to the user.
   // ──────────────────────────────────────────────────────────
+  const RESCUE_MAX_RETRIES = 7
+  const RESCUE_BACKOFF_MS  = [5_000, 8_000, 13_000, 21_000, 34_000, 55_000, 89_000]
+
   const executeDatabaseRescue = async (retryCount = 0) => {
     // Guard: if results already landed (race between final complete SSE
     // event and watchdog fire), do not overwrite good data with a stale
@@ -227,7 +232,7 @@ export default function ResultsPage() {
       if (isMountedRef.current) {
         setStreamLog(prev => [...prev, {
           type: 'status',
-          message: 'Stream idle -- activating DB rescue fallback...',
+          message: 'Stream idle — activating DB rescue fallback...',
         }])
         setRescueAttempted(true)
       }
@@ -240,17 +245,22 @@ export default function ResultsPage() {
       )
 
       if (!rescueRes.ok) {
-        if (rescueRes.status === 404 && retryCount < 3) {
-          // Backend is still processing -- schedule a retry after 5 seconds.
-          const attempt = retryCount + 1
-          console.warn(`[Watchdog] 404 -- backend still processing. Retry ${attempt}/3 in 5s...`)
+        if (rescueRes.status === 404 && retryCount < RESCUE_MAX_RETRIES) {
+          // Backend is still processing — schedule a retry using Fibonacci backoff.
+          const attempt    = retryCount + 1
+          const waitMs     = RESCUE_BACKOFF_MS[retryCount] ?? RESCUE_BACKOFF_MS.at(-1)
+          const waitSec    = Math.round(waitMs / 1_000)
+          console.warn(
+            `[Watchdog] 404 — backend still processing. ` +
+            `Retry ${attempt}/${RESCUE_MAX_RETRIES} in ${waitSec}s...`
+          )
           if (isMountedRef.current) {
             setStreamLog(prev => [...prev, {
               type: 'status',
-              message: `Retrying in 5s (${attempt}/3)...`,
+              message: `Backend processing — retrying in ${waitSec}s (${attempt}/${RESCUE_MAX_RETRIES})...`,
             }])
           }
-          await new Promise(resolve => setTimeout(resolve, 5_000))
+          await new Promise(resolve => setTimeout(resolve, waitMs))
           // After the delay, re-check mount status and results before retrying
           if (!isMountedRef.current) return
           if (resultsRef.current) {
@@ -260,13 +270,13 @@ export default function ResultsPage() {
           return executeDatabaseRescue(attempt)
         }
 
-        // Non-404 error, or all 3 retries exhausted on 404
+        // Non-404 error, or all retries exhausted on 404
         const msg = rescueRes.status === 404
-          ? 'Backend still processing after 3 retries -- no completed result in DB.'
+          ? `Backend still processing after ${RESCUE_MAX_RETRIES} retries — no completed result in DB.`
           : `Rescue endpoint error: ${rescueRes.status}`
         console.warn(`[Watchdog] ${msg}`)
         if (isMountedRef.current) {
-          setStreamLog(prev => [...prev, { type: 'status', message: `${msg}` }])
+          setStreamLog(prev => [...prev, { type: 'status', message: msg }])
           setError('Analysis is taking longer than expected. Please retry or check back in a moment.')
           setPhase('error')
         }
@@ -293,7 +303,7 @@ export default function ResultsPage() {
       if (isMountedRef.current) {
         setStreamLog(prev => [...prev, {
           type: 'done',
-          message: 'Recovered from DB -- pipeline completed server-side.',
+          message: 'Recovered from DB — pipeline completed server-side.',
         }])
       }
 
@@ -324,20 +334,20 @@ export default function ResultsPage() {
   // ──────────────────────────────────────────────────────────
   // SLIDING WATCHDOG RESET
   // Called on every decoded chunk from the SSE stream. Clears the previous
-  // 65-second timer and starts a fresh one. This means the rescue only
-  // fires if the stream goes completely silent for a full 65 seconds --
-  // chosen to safely exceed Render free-tier worst-case cold-start delay
-  // (~50 s) while also covering Groq rate-limit queuing pauses.
+  // 110-second timer and starts a fresh one. This means the rescue only
+  // fires if the stream goes completely silent for a full 110 seconds --
+  // chosen to comfortably absorb Groq exponential backoff retries
+  // (worst-case 2+4+8 = 14s per call) plus Render cold-start delays.
   // ──────────────────────────────────────────────────────────
   const resetWatchdog = () => {
     clearTimeout(groqStreamWatchdog.current)
     if (!isStreamingRef.current) return  // stream already complete, no need to arm
     groqStreamWatchdog.current = setTimeout(() => {
       console.warn(
-        '[Watchdog] Stream idle for 65 s. Activating resilient DB backup rescue...'
+        '[Watchdog] Stream idle for 110 s. Activating resilient DB backup rescue...'
       )
       executeDatabaseRescue()
-    }, 65_000)
+    }, 110_000)
   }
 
   const startAnalysis = async () => {
@@ -457,6 +467,18 @@ export default function ResultsPage() {
         break
     }
   }
+
+  // ── Elapsed-time counter for streaming UX hints ────────────────────────
+  // Increments every second while the streaming phase is active.
+  // Resets when phase changes. Fully cleaned up on unmount.
+  useEffect(() => {
+    if (phase !== 'streaming') { setElapsedSeconds(0); return }
+    const interval = setInterval(() => {
+      if (!isMountedRef.current) return
+      setElapsedSeconds(s => s + 1)
+    }, 1_000)
+    return () => clearInterval(interval)
+  }, [phase])
 
   // ── Scroll-aware anchor ─────────────────────────────────────────────────
   useEffect(() => {
@@ -639,6 +661,27 @@ export default function ResultsPage() {
                 </div>
               ))}
             </div>
+
+            {/* High-demand reassurance banner — shown after 60s of streaming */}
+            {elapsedSeconds >= 60 && (
+              <div style={{
+                marginTop: 18,
+                padding: '11px 16px',
+                borderRadius: 12,
+                background: 'rgba(251,191,36,0.07)',
+                border: '1px solid rgba(251,191,36,0.22)',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                textAlign: 'left',
+              }}>
+                <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>⏳</span>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'rgba(251,191,36,0.85)' }}>
+                  <strong style={{ fontWeight: 700 }}>High demand right now</strong> — your analysis is
+                  still running, just taking a bit longer than usual. Hang tight!
+                </p>
+              </div>
+            )}
           </div>
 
           <div style={{ ...GLASS_OUTER, padding: '20px 22px',
