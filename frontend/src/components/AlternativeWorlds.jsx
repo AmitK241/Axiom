@@ -19,6 +19,8 @@ export default function AlternativeWorlds({ results }) {
       parent_score: r.blind_spot_score.score,
     })))
     .sort((a, b) => b.parent_score - a.parent_score)
+    // Show up to 9 worlds max for layout sanity; backend controls actual count
+    // via ALTERNATIVE_WORLDS_COUNT env var (default 3 per assumption).
     .slice(0, 9)
 
   if (!allWorlds.length) {

@@ -20,6 +20,12 @@ GROQ_MODEL = "llama-3.1-8b-instant"   # free, ultra-fast, always-on
 GROQ_MAX_CONCURRENT: int = int(os.getenv("GROQ_MAX_CONCURRENT", "2"))
 _groq_semaphore: asyncio.Semaphore | None = None   # lazily initialised
 
+# ─── Alternative worlds count ─────────────────────────────────────
+# 3 worlds per assumption is the sweet-spot: enough narrative variety
+# (optimistic / pessimistic / disruptive arc) without inflating TPM.
+# Raise to 6 on a paid Groq tier via env var.
+ALTERNATIVE_WORLDS_COUNT: int = int(os.getenv("ALTERNATIVE_WORLDS_COUNT", "3"))
+
 
 def _get_semaphore() -> asyncio.Semaphore:
     """Return the module-level semaphore, creating it on the first call.
@@ -116,7 +122,10 @@ async def invoke_with_fallback(agent_fn, assumption: str, field: str,
         semaphore = _get_semaphore()
         max_retries = 3
         backoff_seconds = [2, 4, 8]
-        llm = get_llm(temperature=temperature)
+        # 400 tokens is ample for any structured agent JSON response
+        # (6 fields × ~40 tokens each = ~240 tokens; 400 gives a safe 65% buffer
+        # without risking truncation mid-JSON).
+        llm = get_llm(temperature=temperature, max_tokens=400)
 
         for attempt in range(max_retries):
             async with semaphore:
@@ -165,22 +174,21 @@ async def run_dynamic_agent(persona_name: str, assumption: str, field: str,
     """
     system_prompt = (
         f"Act as {persona_name}. "
-        f"Critically analyze the user's breakthrough topic from your strict professional persona perspective. "
-        f"Be specific, sharp, and grounded in your role's expertise. "
-        f"Output format: strict JSON only, no markdown, no preamble."
+        f"Critically analyze the assumption from your strict professional persona. "
+        f"Be specific and grounded. Be precise — avoid repetition and filler. "
+        f"Output: strict JSON only, no markdown, no preamble."
     )
     user_prompt = f"""Field: {field}
 Assumption: "{assumption}"
 
-Analyze this assumption from the perspective of {persona_name}.
-Return JSON with these exact keys:
+Return JSON with these exact keys (all values: 1-2 sentences max):
 {{
-    "perspective": "your key insight as {persona_name}",
-    "weakest_point": "the most critical flaw you identify",
-    "opportunity_or_risk": "what this means for your domain",
-    "challenge": "one-sentence sharp challenge to this assumption from your perspective",
+    "perspective": "key insight as {persona_name}",
+    "weakest_point": "the critical flaw",
+    "opportunity_or_risk": "domain implication",
+    "challenge": "one sharp challenge sentence",
     "risk_level": "low|medium|high|catastrophic",
-    "evidence_ref": "one specific real-world example or data point supporting this challenge, or empty string"
+    "evidence_ref": "one real-world data point, or empty string"
 }}"""
 
     messages = [
@@ -195,7 +203,10 @@ Return JSON with these exact keys:
     for attempt in range(max_retries):
         async with semaphore:
             try:
-                llm = get_llm(temperature=temperature)
+                # 350 tokens: 6 fields × ~35 tokens = ~210 tokens used;
+                # 350 gives a 65% buffer — tight enough to save TPM but
+                # never truncates a complete JSON object.
+                llm = get_llm(temperature=temperature, max_tokens=350)
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(None, llm.invoke, messages)
                 return safe_json_parse(response.content)
@@ -329,25 +340,26 @@ async def run_debate(assumption: str, field: str, matrix: str = DEFAULT_MATRIX) 
             )
 
     # ── Synthesis (shared across both paths) ─────────────────────────
+    # Truncate each agent blob to 300 chars to keep synthesis input tokens
+    # under control. The challenge + risk_level fields are always in the
+    # first ~150 chars of the JSON, so no signal is lost.
     agent_labels = [
-        f"{name}: {json.dumps(result)}"
+        f"{name}: {json.dumps(result)[:300]}"
         for name, result in results.items()
         if name != "synthesis"
     ]
 
-    synthesis_prompt = f"""Four expert agents ({', '.join(selected_agents)}) debated this assumption: "{assumption}"
-Field: {field}
+    synthesis_prompt = f"""Agents ({', '.join(selected_agents)}) debated: "{assumption}" (Field: {field})
 
 {chr(10).join(agent_labels)}
 
-Synthesize their perspectives into a final verdict.
-Return ONLY valid JSON, no markdown:
+Synthesize into a verdict. Return ONLY valid JSON, no markdown:
 {{
     "blind_spot_score": 75,
     "consensus_risk": "low|medium|high|catastrophic",
-    "strongest_challenge": "the most devastating argument against this assumption",
+    "strongest_challenge": "one devastating argument against this assumption",
     "recommended_experiments": ["experiment 1", "experiment 2"],
-    "one_line_verdict": "sharp one-sentence summary of why this assumption is dangerous"
+    "one_line_verdict": "one sharp sentence on why this assumption is dangerous"
 }}"""
 
     semaphore = _get_semaphore()
@@ -357,7 +369,8 @@ Return ONLY valid JSON, no markdown:
     for attempt in range(max_retries):
         async with semaphore:
             try:
-                llm = get_llm(temperature=0.5)
+                # Synthesis: 5 short fields — 300 tokens is generous.
+                llm = get_llm(temperature=0.5, max_tokens=300)
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None, llm.invoke, [HumanMessage(content=synthesis_prompt)]
@@ -391,27 +404,53 @@ async def generate_alternative_worlds(
     field: str,
     synthesis: dict
 ) -> list[dict]:
-    """Generate 3 alternative-world scenarios through the global semaphore."""
+    """Generate ALTERNATIVE_WORLDS_COUNT scenarios in ONE Groq call.
+
+    All scenarios are requested together in a single prompt that returns a
+    JSON envelope {"worlds": [...]}.  This saves N-1 repeated system-prompt
+    and HTTP overhead compared to calling once per scenario.
+
+    max_tokens budget (600):
+      Each world has 6 fields.  Conservative per-field estimate:
+        world_name       ~8 tokens
+        tagline          ~20 tokens
+        description      ~50 tokens   (2 sentences)
+        research_dirs ×2 ~30 tokens
+        startup_opp      ~25 tokens
+        probability       ~3 tokens
+      Total per world  ~136 tokens
+      3 worlds × 136  = ~408 tokens
+      + JSON envelope overhead ~30 tokens
+      600 gives a comfortable ~35% buffer — enough to finish a full
+      JSON array without ever truncating mid-object.
+
+    Truncation safety: the outer try/except on json.loads will catch any
+    partial JSON (e.g. from an unexpected mid-array cut) and return an
+    empty list, which the UI handles gracefully with a fallback message.
+    """
+    n = ALTERNATIVE_WORLDS_COUNT
     semaphore = _get_semaphore()
-    llm = get_llm(temperature=0.85)
+    # 600 tokens: enough for N=3 worlds with buffer; raise env var for N>3.
+    llm = get_llm(temperature=0.85, max_tokens=600)
     prompt = f"""Field: {field}
 Assumption that might be FUNDAMENTALLY WRONG: "{assumption}"
-Strongest evidence it's wrong: {synthesis.get('strongest_challenge', 'multiple angles')}
+Evidence it's wrong: {synthesis.get('strongest_challenge', 'multiple angles')[:200]}
 
-Generate 3 "Alternative Worlds" — what would reality look like if this assumption is false?
-Each world should be specific, imaginative, and grounded.
+Generate exactly {n} distinct "Alternative Worlds" — specific, imaginative, grounded.
+Each world: different arc (e.g. optimistic / pessimistic / disruptive).
+Values: be concise — description is 2 sentences, startup_opportunity is 1 sentence.
 
-Return ONLY valid JSON array, no markdown:
-[
+Return ONLY valid JSON, no markdown, no preamble:
+{{"worlds": [
   {{
     "world_name": "catchy 3-word name",
     "tagline": "one provocative sentence",
-    "description": "2-3 sentences describing this alternative reality",
+    "description": "2 sentences on this alternative reality",
     "research_directions": ["direction 1", "direction 2"],
-    "startup_opportunity": "one specific business idea this unlocks",
+    "startup_opportunity": "one specific business idea",
     "probability": 25
   }}
-]"""
+]}}"""
 
     max_retries = 3
     backoff_seconds = [2, 4, 8]
@@ -423,11 +462,19 @@ Return ONLY valid JSON array, no markdown:
                 response = await loop.run_in_executor(
                     None, llm.invoke, [HumanMessage(content=prompt)]
                 )
-                text = response.content.strip().replace("```json", "").replace("```", "").strip()
+                text = response.content.strip()
+                text = text.replace("```json", "").replace("```", "").strip()
                 try:
-                    data = json.loads(text)
-                    return data if isinstance(data, list) else []
+                    parsed = json.loads(text)
+                    # Accept both envelope {"worlds": [...]} and bare array [...]
+                    if isinstance(parsed, dict) and "worlds" in parsed:
+                        return parsed["worlds"]
+                    if isinstance(parsed, list):
+                        return parsed
+                    return []
                 except Exception:
+                    # Partial/truncated JSON — return empty so UI shows fallback
+                    print("[AXIOM] alt-worlds JSON parse failed — returning empty")
                     return []
             except Exception as exc:
                 err_str = str(exc)
