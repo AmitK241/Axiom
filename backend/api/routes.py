@@ -8,10 +8,13 @@ from core.pipeline import (
 )
 from memory.database import save_analysis, get_recent_analyses, get_analysis_by_id
 import json, asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=4)
+
+# NOTE: ThreadPoolExecutor has been intentionally removed.
+# The pipeline is now fully async (asyncio-native), so run_in_executor() wrappers
+# are no longer needed. The global asyncio.Semaphore in pipeline.py controls
+# concurrency across all users and matrices without blocking the event loop.
 
 class AnalyzeRequest(BaseModel):
     field: str
@@ -31,26 +34,21 @@ async def analyze_stream(request: AnalyzeRequest):
             yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting hidden assumptions...', 'step': 1, 'total_steps': 3})}\n\n"
             await asyncio.sleep(0.1)
 
-            loop = asyncio.get_event_loop()
-            assumptions = await loop.run_in_executor(
-                executor, extract_assumptions, field
-            )
+            # Directly await — pipeline is now fully async, no executor needed
+            assumptions = await extract_assumptions(field)
 
             yield f"data: {json.dumps({'type': 'assumptions_found', 'count': len(assumptions), 'assumptions': assumptions})}\n\n"
 
             # Step 2: Debate each assumption
-            all_results = []
+            all_results = []   # local per-request list — no shared mutable state
             for i, assumption_obj in enumerate(assumptions):
                 assumption_text = assumption_obj["assumption"]
 
                 yield f"data: {json.dumps({'type': 'debating', 'assumption': assumption_text, 'index': i, 'total': len(assumptions)})}\n\n"
 
-                debate = await loop.run_in_executor(
-                        executor, run_debate, assumption_text, field, matrix
-                    )
+                debate = await run_debate(assumption_text, field, matrix)
 
-                worlds = await loop.run_in_executor(
-                    executor, generate_alternative_worlds,
+                worlds = await generate_alternative_worlds(
                     assumption_text, field, debate.get("synthesis", {})
                 )
 
@@ -110,8 +108,7 @@ async def analyze(request: AnalyzeRequest):
     matrix = request.matrix.strip() or "epistemic"
     if not field:
         raise HTTPException(400, "Field cannot be empty")
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(executor, run_full_pipeline, field, matrix)
+    result = await run_full_pipeline(field, matrix)
     analysis_id = await save_analysis(field, result)
     result["analysis_id"] = analysis_id
     return result
